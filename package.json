@@ -1,0 +1,26 @@
+{
+  "name": "whatsapp-scheduler-bot",
+  "version": "1.0.0",
+  "description": "WhatsApp bot that sends scheduled messages from a Google Sheet.",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "google-auth-library": "^10.6.1",
+    "google-spreadsheet": "^5.2.0",
+    "node-cron": "^4.2.1",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.17.1"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "jest"
+  },
+  "jest": {
+    "testMatch": ["**/tests/**/*.test.js"]
+  },
+  "devDependencies": {
+    "jest": "^25.0.0",
+    "nodemon": "^3.1.14"
+  }
+}

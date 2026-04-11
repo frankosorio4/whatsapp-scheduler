@@ -1,0 +1,19 @@
+# WhatsApp Session (Your Login)
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Google API Credentials (Your Secret Keys)
+creds.json
+
+# Environment Variables (Your Config)
+.env
+
+# Node Modules (The heavy library files)
+node_modules/
+
+# Message logs (local only)
+logs/
+
+# OS specific files
+.DS_Store
+Thumbs.db
