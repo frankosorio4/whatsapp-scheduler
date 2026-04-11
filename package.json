@@ -20,7 +20,7 @@
     "testMatch": ["**/tests/**/*.test.js"]
   },
   "devDependencies": {
-    "jest": "^25.0.0",
+    "jest": "^29.0.0",
     "nodemon": "^3.1.14"
   }
 }
