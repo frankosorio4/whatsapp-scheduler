@@ -7,7 +7,8 @@
 const cron = require('node-cron');
 const { getSheetAndRows, logSentMessage, updateServerTimestamp, archiveFinishedRows, addRowToSheet } = require('./services/googleSheets');
 const { parseRowData } = require('./utils/parser');
-const { formatMessage, formatTimestamp, sortByMode } = require('./utils/formatter');
+const { formatMessage, formatTimestamp, sortByMode, sortByDate } = require('./utils/formatter');
+const { computeNextOccurrence } = require('./utils/dateUtils');
 const { logMessageToFile } = require('./utils/logger');
 const { withRetry, notifyOwner } = require('./utils/notifier');
 
@@ -254,7 +255,77 @@ async function getPendingMessages() {
     }
 }
 
-// --- SEND SCHEDULED MESSAGE ---
+// --- PENDING MESSAGES BY DATE ---
+// Same as getPendingMessages() but sorts both sections (once and recurring)
+// by next scheduled send time ascending (nearest first).
+async function getPendingMessagesByDate() {
+    try {
+        const { rows } = await withRetry(() => getSheetAndRows());
+
+        console.log(`[${new Date().toLocaleTimeString()}] Fetching pending messages (by date)...`);
+
+        const now = new Date();
+        const pendingOnce = [];
+        const pendingRecurring = [];
+        const pendingScheduled = [];
+
+        rows.forEach((row) => {
+            const data = row.toObject();
+            const parsed = parseRowData(data);
+
+            if (!parsed) return;
+
+            const { day, month, hour, minute, subject, message, mode } = parsed;
+            const time = `${hour}:${minute.toString().padStart(2, '0')}`;
+            const nextOccurrence = computeNextOccurrence(parsed, now);
+
+            if (mode === 'once') {
+                if (!data.log_last_sent_message) {
+                    pendingOnce.push({ subject, message, day, month, time, nextOccurrence });
+                }
+            } else if (mode === 'scheduled') {
+                const interval = parsed.intervalDays   > 0 ? `every ${parsed.intervalDays} days`
+                               : parsed.intervalWeeks  > 0 ? `every ${parsed.intervalWeeks} weeks`
+                               : `every ${parsed.intervalMonths} months`;
+                const finish = parsed.finishDate ? parsed.finishDate.toLocaleDateString('pt-BR') : 'no end date';
+                pendingScheduled.push({ subject, message, day, month, time, interval, finish, nextOccurrence });
+            } else {
+                pendingRecurring.push({ mode, subject, message, day, month, time, nextOccurrence });
+            }
+        });
+
+        const sections = [];
+
+        if (pendingOnce.length > 0) {
+            const sorted = pendingOnce.sort(sortByDate)
+                .map(r => `• *${r.subject}:* ${r.message} - ${r.day}/${r.month} at ${r.time}`);
+            sections.push(`*📅 Once (${sorted.length} pending):*\n${sorted.join('\n')}`);
+        }
+
+        if (pendingRecurring.length > 0) {
+            const sorted = pendingRecurring.sort(sortByDate)
+                .map(r => `• *[${r.mode}] ${r.subject}:* ${r.message} - ${r.day}/${r.month} at ${r.time}`);
+            sections.push(`*🔁 Recurring (${sorted.length} active):*\n${sorted.join('\n')}`);
+        }
+
+        if (pendingScheduled.length > 0) {
+            const sorted = pendingScheduled.sort(sortByDate)
+                .map(r => `• *${r.subject}:* ${r.message} - ${r.interval}, starts ${r.day}/${r.month} at ${r.time}, ends ${r.finish}`);
+            sections.push(`*📆 Scheduled (${sorted.length} active):*\n${sorted.join('\n')}`);
+        }
+
+        if (sections.length === 0) {
+            return '✅ No pending or active messages.';
+        }
+
+        return sections.join('\n\n');
+
+    } catch (e) {
+        console.error('Get Pending Messages By Date Error:', e.message);
+        return '❌ Could not fetch pending messages. Check the server logs.';
+    }
+}
+
 // Not async - cron.schedule() is synchronous and returns the task directly.
 // Making this async would wrap the return in a Promise, breaking task.stop().
 //
@@ -347,6 +418,7 @@ async function saveNewSchedule(client, sheetData) {
 module.exports = {
     syncSheetToScheduler,
     getPendingMessages,
+    getPendingMessagesByDate,
     archiveFinished,
     saveNewSchedule,
 };

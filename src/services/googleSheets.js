@@ -17,21 +17,27 @@ const { isRowFinished } = require('../utils/parser');
 // On the server (DigitalOcean), creds.json is gitignored.
 // Its contents are stored in GOOGLE_CREDS_JSON as a single-line JSON string.
 // Locally, it falls back to reading creds.json from the project root.
+// The file is loaded lazily (inside the function) so the module can be imported
+// without immediately reading disk — avoids stale require() cache issues.
 let creds;
-if (process.env.GOOGLE_CREDS_JSON) {
-    try {
-        creds = JSON.parse(process.env.GOOGLE_CREDS_JSON);
-    } catch (e) {
-        console.error('[ERROR] GOOGLE_CREDS_JSON is set but is not valid JSON. Exiting.');
-        process.exit(1);
+function loadCreds() {
+    if (creds) return creds;
+    if (process.env.GOOGLE_CREDS_JSON) {
+        try {
+            creds = JSON.parse(process.env.GOOGLE_CREDS_JSON);
+        } catch (e) {
+            console.error('[ERROR] GOOGLE_CREDS_JSON is set but is not valid JSON. Exiting.');
+            process.exit(1);
+        }
+    } else {
+        try {
+            creds = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, '../../creds.json'), 'utf8'));
+        } catch (e) {
+            console.error('[ERROR] creds.json not found and GOOGLE_CREDS_JSON is not set. Exiting.');
+            process.exit(1);
+        }
     }
-} else {
-    try {
-        creds = require('../../creds.json');
-    } catch (e) {
-        console.error('[ERROR] creds.json not found and GOOGLE_CREDS_JSON is not set. Exiting.');
-        process.exit(1);
-    }
+    return creds;
 }
 
 // --- STARTUP VALIDATION ---
@@ -41,16 +47,24 @@ if (!process.env.SPREADSHEET_ID) {
 }
 
 // --- GOOGLE AUTH ---
-const serviceAccountAuth = new JWT({
-    email: creds.client_email,
-    key: creds.private_key,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-});
+// serviceAccountAuth is built lazily on first getDoc() call so loadCreds()
+// runs after dotenv has populated process.env — not at module parse time.
+let serviceAccountAuth;
+function getAuth() {
+    if (serviceAccountAuth) return serviceAccountAuth;
+    const c = loadCreds();
+    serviceAccountAuth = new JWT({
+        email: c.client_email,
+        key: c.private_key,
+        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+    return serviceAccountAuth;
+}
 
 // Loads the spreadsheet doc (without fetching rows) — used internally by functions
 // that need access to the full doc object (e.g. to find or create sheets by title).
 async function getDoc() {
-    const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID, serviceAccountAuth);
+    const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID, getAuth());
     await doc.loadInfo();
     return doc;
 }

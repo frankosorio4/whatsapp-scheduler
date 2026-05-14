@@ -552,6 +552,27 @@ describe('isRowFinished()', () => {
         expect(isRowFinished(makeData({ once: true, date: '15/03' }), TODAY)).toBe(true);
     });
 
+    it('returns true for a once row with a past DD/MM/YYYY date (full year)', () => {
+        // 15/03/2026 is before 01/04/2026
+        expect(isRowFinished(makeData({ date: '15/03/2026' }), TODAY)).toBe(true);
+    });
+
+    it('returns true for a once row with a past DD/MM/YY date (2-digit year)', () => {
+        // 15/03/26 expands to 15/03/2026, which is before 01/04/2026
+        expect(isRowFinished(makeData({ date: '15/03/26' }), TODAY)).toBe(true);
+    });
+
+    it('returns false for a once row with a future DD/MM/YYYY date', () => {
+        // 10/06/2026 is after 01/04/2026
+        expect(isRowFinished(makeData({ date: '10/06/2026' }), TODAY)).toBe(false);
+    });
+
+    it('returns true for a once row from a past year — regression test', () => {
+        // Before the fix, 15/03/25 was reconstructed as 15/03/2026 (future) and never archived.
+        const pastToday = new Date(2025, 3, 1); // 01/04/2025
+        expect(isRowFinished(makeData({ date: '15/03/25' }), pastToday)).toBe(true);
+    });
+
 });
 
 // ---------------------------------------------------------------------------

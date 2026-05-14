@@ -89,4 +89,15 @@ function sortByMode(a, b) {
     return (MODE_ORDER[a.mode] ?? 99) - (MODE_ORDER[b.mode] ?? 99);
 }
 
-module.exports = { formatMessage, formatTimestamp, getNewScheduleTemplate, buildScheduleConfirmation, sortByMode };
+// --- SORT BY DATE ---
+// Comparator for !pending-date. Rows must have a `nextOccurrence` field (Date object)
+// pre-computed by computeNextOccurrence() in scheduler.js.
+// Sorts ascending: nearest send time first.
+// Rows missing nextOccurrence sort last.
+function sortByDate(a, b) {
+    const ta = a.nextOccurrence ? a.nextOccurrence.getTime() : Infinity;
+    const tb = b.nextOccurrence ? b.nextOccurrence.getTime() : Infinity;
+    return ta - tb;
+}
+
+module.exports = { formatMessage, formatTimestamp, getNewScheduleTemplate, buildScheduleConfirmation, sortByMode, sortByDate };

@@ -8,11 +8,13 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const cron = require('node-cron');
 const fs = require('fs');
+const path = require('path');
 //console.log('[DEBUG] 3. core modules loaded');
 
 const {
     syncSheetToScheduler,
     getPendingMessages,
+    getPendingMessagesByDate,
     archiveFinished,
     saveNewSchedule,
 } = require('./src/scheduler');
@@ -59,7 +61,19 @@ const client = new Client({
     puppeteer: {
         headless: true,
         executablePath: process.env.CHROME_PATH || undefined,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
+        protocolTimeout: 180000,
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--disable-extensions',
+            '--disable-software-rasterizer',
+            '--no-first-run',
+            '--disable-background-networking',
+            '--disable-sync',
+            '--mute-audio',
+        ]
     }
 });
 //console.log('[DEBUG] 6. client created, calling initialize...');
@@ -73,6 +87,10 @@ client.on('qr', qr => {
 client.on('ready', async () => {
     console.log('Bot is online!');
     const ownerNumber = `${process.env.OWNER_NUMBER}@c.us`;
+
+    // Log the authenticated phone number for debugging
+    const myInfo = client.info.me;
+    console.log(`[DEBUG] Authenticated as: ${myInfo?.user || 'unknown'}`);
 
     try {
         await client.sendMessage(ownerNumber, 'Bot restarted and Google Sheets scheduler active.');
@@ -88,10 +106,43 @@ client.on('ready', async () => {
     });
 });
 
+// --- RECONNECTION HANDLING ---
+// When the WhatsApp session drops or auth fails, exit cleanly so pm2 restarts
+// the process with a fresh Chromium instance. The LocalAuth session on disk
+// means no QR scan is needed on reconnect (unless WhatsApp invalidated the session).
+client.on('disconnected', (reason) => {
+    console.error('[DISCONNECTED] WhatsApp client disconnected:', reason);
+    console.log('[DISCONNECTED] Exiting so pm2 can restart with a fresh session...');
+    process.exit(1);
+});
+
+client.on('auth_failure', (msg) => {
+    console.error('[AUTH FAILURE] WhatsApp authentication failed:', msg);
+    process.exit(1);
+});
+
 // --- COMMAND ROUTING ---
 client.on('message', async (msg) => {
-    const senderNumber = msg.from.replace('@c.us', '');
-    const isOwner = senderNumber === process.env.OWNER_NUMBER;
+    // Log full message object for debugging
+    console.log(`[MSG] from=${msg.from} author=${msg.author} body=${msg.body}`);
+
+    // Resolve sender phone number.
+    // When using WhatsApp Web or linked devices, msg.from may be a @lid (device ID)
+    // like "173980568793106@lid" instead of the real phone number "554888572036@c.us".
+    // In that case, getContactById() resolves the device ID to the actual phone number.
+    let senderNumber = msg.from.replace('@c.us', '').replace('@lid', '');
+    if (msg.from.endsWith('@lid')) {
+        try {
+            const contact = await client.getContactById(msg.from);
+            if (contact?.number) senderNumber = contact.number;
+        } catch (e) {
+            console.log(`[MSG] Could not resolve @lid to phone number: ${e.message}`);
+        }
+    }
+
+    const authorNumber = msg.author ? msg.author.replace('@c.us', '').replace('@lid', '') : '';
+    const isOwner = senderNumber === process.env.OWNER_NUMBER || authorNumber === process.env.OWNER_NUMBER;
+    console.log(`[MSG] sender=${senderNumber} author=${authorNumber} owner=${process.env.OWNER_NUMBER} isOwner=${isOwner}`);
 
     if (msg.body.toLowerCase() === '!ping') {
         await msg.reply('pong');
@@ -108,6 +159,12 @@ client.on('message', async (msg) => {
         const reply = await getPendingMessages();
         await msg.reply(reply);
 
+    } else if (msg.body === '!pending-date') {
+        if (!isOwner) return;
+        await syncSheetToScheduler(client);
+        const reply = await getPendingMessagesByDate();
+        await msg.reply(reply);
+
     } else if (msg.body === '!archive') {
         if (!isOwner) return;
         const reply = await archiveFinished(client);
@@ -116,7 +173,7 @@ client.on('message', async (msg) => {
     } else if (msg.body.startsWith('!logs')) {
         if (!isOwner) return;
         const parts = msg.body.trim().split(/\s+/);
-        const n = parts[1] || '10'; // default to 10 if no number provided
+        const n = Math.max(1, Math.min(parseInt(parts[1], 10) || 10, 100)); // clamp between 1 and 100
         const reply = getLogsMessage(n);
         await msg.reply(reply);
 
@@ -129,8 +186,9 @@ client.on('message', async (msg) => {
         try {
             await msg.reply('Resetting session and shutting down...');
             await client.logout();
-            if (fs.existsSync('./.wwebjs_auth')) {
-                fs.rmSync('./.wwebjs_auth', { recursive: true, force: true });
+            const authDir = path.join(__dirname, '.wwebjs_auth');
+            if (fs.existsSync(authDir)) {
+                fs.rmSync(authDir, { recursive: true, force: true });
             }
             process.exit(0);
         } catch (error) {
@@ -188,4 +246,11 @@ client.on('message', async (msg) => {
     }
 });
 
-client.initialize();
+// Catch initialization failures (e.g. Chromium protocolTimeout during inject).
+// Without this, a failed initialize() leaves the process running as a zombie —
+// the client object exists but the page is dead, causing detached Frame errors.
+client.initialize().catch((err) => {
+    console.error('[INIT ERROR] client.initialize() failed:', err.message);
+    console.log('[INIT ERROR] Exiting so pm2 can restart...');
+    process.exit(1);
+});

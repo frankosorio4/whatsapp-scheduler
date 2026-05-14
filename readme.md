@@ -16,6 +16,100 @@ The bot uses:
 
 ---
 
+## How It Works (Visual Workflow)
+```mermaid
+flowchart TD
+    GS[Google Sheets: Control Panel]
+
+    subgraph VPS [Server: Hetzner / VPS]
+        direction TB
+        PM2[pm2: Keeps bot running 24/7]
+        CRON[node-cron: Fires jobs on schedule]
+        AUTH[google-auth-library: JWT service-account auth]
+        GSAPI[Google Sheets API: Read schedules & log status]
+        WAW[whatsapp-web.js: Controls WA Web session]
+        PUP[Puppeteer: Headless Chromium engine]
+
+        PM2 -.-> CRON
+        CRON --> GSAPI
+        GSAPI <--> AUTH
+        WAW --> PUP
+        GSAPI -- Trigger Send --> WAW
+    end
+
+    GSAPI <--> GS
+    WAW <--> WA[WhatsApp: Recipient]
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          SERVER (Hetzner / VPS)                        │
+│                                                                         │
+│   ┌─────────────────────────────────────────────────────────────┐      │
+│   │  pm2  — keeps the bot running 24/7, restarts on crash      │      │
+│   │                                                             │      │
+│   │   ┌─────────────────────────────────────────────────┐      │      │
+│   │   │  Node.js  (index.js + src/)                     │      │      │
+│   │   │                                                  │      │      │
+│   │   │   dotenv ──► loads .env vars at startup         │      │      │
+│   │   │                                                  │      │      │
+│   │   │   ┌──────────────┐   ┌──────────────────────┐   │      │      │
+│   │   │   │  node-cron   │   │  google-auth-library  │   │      │      │
+│   │   │   │              │   │                       │   │      │      │
+│   │   │   │  Fires jobs  │   │  JWT service-account  │   │      │      │
+│   │   │   │  on schedule │   │  auth to Google APIs  │   │      │      │
+│   │   │   └──────┬───────┘   └──────────┬────────────┘   │      │      │
+│   │   │          │                       │                │      │      │
+│   │   │          ▼                       ▼                │      │      │
+│   │   │   ┌──────────────┐   ┌──────────────────────┐   │      │      │
+│   │   │   │whatsapp-web.js│  │  Google Sheets API    │   │      │      │
+│   │   │   │              │   │                       │   │      │      │
+│   │   │   │  Controls WA │   │  Read schedules       │   │      │      │
+│   │   │   │  Web session │   │  Log sent timestamp   │   │      │      │
+│   │   │   └──────┬───────┘   └──────────┬────────────┘   │      │      │
+│   │   │          │                       │                │      │      │
+│   │   │          ▼                       │                │      │      │
+│   │   │   ┌──────────────┐               │                │      │      │
+│   │   │   │  Puppeteer   │               │                │      │      │
+│   │   │   │  (headless   │               │                │      │      │
+│   │   │   │  Chromium)   │               │                │      │      │
+│   │   │   └──────┬───────┘               │                │      │      │
+│   │   └──────────┼───────────────────────┼────────────────┘      │      │
+│   └──────────────┼───────────────────────┼───────────────────────┘      │
+└──────────────────┼───────────────────────┼──────────────────────────────┘
+                   │                       │
+                  ◄ ►                      ◄ ►
+         ┌─────────────────┐    ┌──────────────────────┐
+         │    WhatsApp     │    │    Google Sheet      │
+         │   (recipient)   │    │  (your spreadsheet)  │
+         │                 │    │                      │
+         │  ◄─ receives    │    │  ◄─ read schedules   │
+         │  ──► commands   │    │  ──► log timestamps  │
+         └─────────────────┘    └──────────────────────┘
+```
+
+---
+
+## The 7-Step Process
+
+```
+[1] node-cron fires — checks for pending messages every 30 minutes
+    ↓
+[2] googleSheets.js reads the Google Sheet — fetches all schedule rows
+    ↓
+[3] scheduler.js evaluates each row — mode, date, interval, finish date
+    ↓
+[4] whatsapp-web.js sends the message via Puppeteer (headless Chromium)
+    ↓
+[5] googleSheets.js logs the sent timestamp back to the sheet
+    ↓
+[6] Finished rows are archived to the "done" tab automatically
+    ↓
+[7] notifier.js alerts the owner on WhatsApp if anything goes wrong
+```
+
+---
+
 # Features
 
 - Send **scheduled WhatsApp messages automatically**
@@ -30,7 +124,7 @@ The bot uses:
 - Persistent WhatsApp login using **LocalAuth**
 - **Human-like staggered delays** between messages to reduce spam flags
 - **Archive finished rows** automatically to a "done" sheet to keep the active spreadsheet clean
-- **Unit tested** with Jest — pure parsing logic covered by 89 test cases across 8 groups
+- **Unit tested** with Jest — pure parsing logic covered by 214 test cases across 23 groups in 6 test files
 
 ---
 
@@ -43,15 +137,19 @@ whatsapp-project/
 │   │   └── googleSheets.js   ← Google Sheets auth, row fetching, cell writing, addRowToSheet
 │   ├── utils/
 │   │   ├── parser.js         ← parseRowData(), isRowFinished(), parseNewScheduleInput() — pure, no deps
-│   │   ├── formatter.js      ← formatMessage(), formatTimestamp(), getNewScheduleTemplate(), buildScheduleConfirmation() — pure
+│   │   ├── formatter.js      ← formatMessage(), formatTimestamp(), getNewScheduleTemplate(), buildScheduleConfirmation(), sortByMode(), sortByDate() — pure
+│   │   ├── dateUtils.js      ← computeNextOccurrence(parsed, now) — pure, no deps. Used by scheduler.js for !pending-date
 │   │   ├── logger.js         ← logMessageToFile(), getLastLogLines() — local file logger
 │   │   ├── notifier.js       ← withRetry(), notifyOwner() — retry logic and owner alerts
 │   │   └── messages.js       ← getHelpMessage(), getLogsMessage() — pure WhatsApp reply builders
 │   └── scheduler.js          ← Core engine: sync, cron scheduling, send, archive, pending, save
 ├── tests/
-│   ├── parser.test.js        ← Jest unit tests for parser.js (89 test cases across 8 groups)
+│   ├── parser.test.js        ← Jest unit tests for parser.js (93 test cases across 8 groups)
 │   ├── logger.test.js        ← Jest unit tests for logger.js (19 test cases across 2 groups)
-│   └── notifier.test.js      ← Jest unit tests for notifier.js (13 test cases across 4 groups)
+│   ├── notifier.test.js      ← Jest unit tests for notifier.js (13 test cases across 4 groups)
+│   ├── formatter.test.js     ← Jest unit tests for formatter.js (38 test cases across 5 groups)
+│   ├── messages.test.js      ← Jest unit tests for messages.js (21 test cases across 2 groups)
+│   └── scheduler.pending-date.test.js ← Jest unit tests for computeNextOccurrence() and sortByDate() (30 test cases across 6 groups)
 ├── index.js                  ← Entry point — WhatsApp client, command routing, session state
 ├── ecosystem.config.js       ← pm2 process manager config (for server deploy)
 ├── creds.json                ← Google Service Account credentials (local only, gitignored)
@@ -293,7 +391,8 @@ Commands can only be sent by the owner number defined in `.env`, except `!ping` 
 |---------|-------------|
 | `!ping` | Health check — replies `pong`. Open to everyone. |
 | `!sync` | Reloads the schedule from Google Sheets immediately. Also archives finished rows silently. |
-| `!pending` | Shows pending `once` messages not yet sent, all active recurring messages, and all active `scheduled` interval rows. |
+| `!pending` | Shows pending `once` messages not yet sent, all active recurring messages, and all active `scheduled` interval rows. Recurring sorted daily → weekly → monthly. |
+| `!pending-date` | Same as `!pending` but all sections sorted by next scheduled send time, nearest first. |
 | `!archive` | Moves all finished rows to the "done" sheet and re-syncs the schedule. |
 | `!logs N` | Shows the last N messages sent by the bot (e.g. `!logs 10`). Defaults to 10 if N is omitted. |
 | `!new-schedule` | Starts a guided 3-step flow to add a new scheduled message via WhatsApp. |
@@ -356,51 +455,58 @@ Sessions expire automatically after **10 minutes** of inactivity. If validation 
 
 ---
 
-# Deploying to DigitalOcean
+# Deploying to Hetzner (Recommended)
 
-## Requirements
+> **Why Hetzner?** ~€10/month for 4GB RAM (CX23) vs ~$12/month for 1GB on DigitalOcean. Better latency from Frankfurt to Brazil. No swap needed.
 
-- A DigitalOcean account
-- Your repo pushed to GitHub
-- Your local `creds.json` content ready to paste
+## Step 1 — Get Your Server IP
 
----
-
-## Step 1 — Create a Droplet
-
-1. Go to https://digitalocean.com and sign up
-2. Create a new **Project**
-3. Click **Create → Droplet**:
-   - **Image:** Ubuntu 22.04 LTS
-   - **Size:** Basic → Regular → **$6/month** (1 vCPU, 1GB RAM)
-   - **Region:** closest to you
-   - **Authentication:** SSH Key (paste your `~/.ssh/id_rsa.pub`) or Password
-4. Click **Create Droplet**
+1. Go to [cloud.hetzner.com](https://cloud.hetzner.com)
+2. Login and open your project
+3. Copy the **IPv4** address (e.g., `xxx.xxx.xxx.xxx`)
 
 ---
 
-## Step 2 — Access the server
+## Step 2 — Connect to the Server
 
-Either SSH from your terminal:
+**Option A — SSH (from your local terminal):**
 ```bash
-ssh root@YOUR_DROPLET_IP
+ssh root@YOUR_SERVER_IP
 ```
+Example: `ssh root@192.168.1.100`
 
-Or use the **Access → Launch Droplet Console** button in the DigitalOcean dashboard.
+**Option B — Hetzner Console (web):**
+1. Go to [cloud.hetzner.com](https://cloud.hetzner.com)
+2. Click on your server → **Console**
+3. Login with username `root` and your server password
 
 ---
 
-## Step 3 — Install dependencies
+## Step 3 — Install Dependencies
+
+Run these commands one by one:
 
 ```bash
 apt update && apt upgrade -y
+```
+
+```bash
 apt install -y git chromium-browser
+```
+
+```bash
 curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+```
+
+```bash
 apt install -y nodejs
+```
+
+```bash
 npm install -g pm2
 ```
 
-Verify:
+Verify installation:
 ```bash
 node -v          # v20.x.x
 chromium-browser --version
@@ -409,75 +515,91 @@ pm2 -v
 
 ---
 
-## Step 4 — Add swap memory (required for 512MB droplets)
+## Step 4 — Clone the Repo
 
-If your Droplet has 512MB RAM, Chromium won't have enough memory to start. Add a 1GB swap file:
-
+**If your repo is public:**
 ```bash
-fallocate -l 1G /swapfile
-chmod 600 /swapfile
-mkswap /swapfile
-swapon /swapfile
-echo '/swapfile none swap sw 0 0' >> /etc/fstab
-```
-
-Verify:
-```bash
-free -m   # Swap should show 1023
-```
-
----
-
-## Step 5 — Clone the repo
-
-```bash
-git clone -b deploy-digital-ocean https://github.com/YOUR_USERNAME/WhatsApp-Scheduler-Bot.git
+git clone -b deploy-hetzner https://github.com/YOUR_USERNAME/WhatsApp-Scheduler-Bot.git
 cd WhatsApp-Scheduler-Bot
 npm install
 ```
 
-> If your repo is private, use a Personal Access Token:
-> ```bash
-> git clone -b deploy-digital-ocean https://YOUR_TOKEN@github.com/YOUR_USERNAME/WhatsApp-Scheduler-Bot.git
-> ```
+**If your repo is private (requires authentication):**
+
+1. Create a Personal Access Token (Step 5 below)
+2. Configure git to store credentials (so you don't need the token in every command):
+   ```bash
+   git config --global credential.helper store
+   ```
+3. Clone using the token once — git will remember it:
+   ```bash
+   git clone -b deploy-hetzner https://ghp_YOUR_TOKEN@github.com/YOUR_USERNAME/WhatsApp-Scheduler-Bot.git
+   cd WhatsApp-Scheduler-Bot
+   npm install
+   ```
+
+> After the first clone, `git pull` will work without needing the token again.
 
 ---
 
-## Step 6 — Create the `.env` file on the server
+## Step 5 — Create a GitHub Personal Access Token (for private repos)
+
+1. Go to GitHub → **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)**
+2. Click **Generate new token**
+3. Give it a name (e.g., "hetzner-deploy")
+4. Select **repo** scope (full control)
+5. Click **Generate**
+6. Copy the token (it looks like `ghp_xxxxxxxxxxxx`)
+
+Use this token in Step 4 instead of your password.
+
+---
+
+## Step 6 — Create the `.env` File
 
 ```bash
+cd WhatsApp-Scheduler-Bot
 nano .env
 ```
 
-Add the following — paste the entire content of your local `creds.json` as a single line for `GOOGLE_CREDS_JSON`:
-
+Add the following:
 ```
 SPREADSHEET_ID=your_spreadsheet_id
 OWNER_NUMBER=your_whatsapp_number
-GOOGLE_CREDS_JSON={"type":"service_account","project_id":"..."}
+GOOGLE_CREDS_JSON={"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}
 CHROME_PATH=/usr/bin/chromium-browser
 ```
 
-Save with `Ctrl+O` → Enter → exit with `Ctrl+X`.
+- **SPREADSHEET_ID**: Get it from your Google Sheet URL (the long string between `/d/` and `/edit`)
+- **OWNER_NUMBER**: Your WhatsApp number with country code, no + and do not add the first 9 that ussually we put on brasilian numbers (e.g., `5511999999999`)
+- **GOOGLE_CREDS_JSON**: Paste your entire `creds.json` file content as a **single line** (no line breaks)
+- **CHROME_PATH**: Must be `/usr/bin/chromium-browser` on the server
+
+Save: `Ctrl+O` → `Enter` → `Ctrl+X`
 
 ---
 
-## Step 7 — Run once to scan the QR code
+## Step 7 — Scan QR Code (First Run)
+
+> If the bot is already running with pm2, stop it first:
+> ```bash
+> pm2 stop whatsapp-bot
+> ```
 
 ```bash
 node index.js
 ```
 
-A QR code will appear in the terminal. Scan it with your phone:
+A QR code will appear in the terminal. Scan it with:
 ```
 WhatsApp → Linked Devices → Link Device
 ```
 
-Once you see `Bot is online!` press `Ctrl+C` — the session is saved in `.wwebjs_auth`.
+Once you see `Bot is online!`, press `Ctrl+C`. The session is now saved in `.wwebjs_auth`.
 
 ---
 
-## Step 8 — Hand over to pm2
+## Step 8 — Start with pm2
 
 ```bash
 pm2 start ecosystem.config.js
@@ -485,7 +607,7 @@ pm2 save
 pm2 startup
 ```
 
-Copy and run the command that `pm2 startup` outputs. This makes the bot survive server reboots.
+Copy and run the command that `pm2 startup` outputs — this makes the bot survive server reboots.
 
 ---
 
@@ -503,56 +625,95 @@ Startup confirmation sent to your phone.
 Total active schedules: X
 ```
 
-You can now close the console — the bot runs 24/7 on the server.
-
 ---
 
-## Daily management commands
+## Update Workflow (After code changes on GitHub)
 
 ```bash
-pm2 status                    # check if bot is running
-pm2 logs whatsapp-bot         # see live logs
-pm2 restart whatsapp-bot      # restart the bot
-pm2 stop whatsapp-bot         # stop the bot
-```
-
----
-
-## Downloading the message log file
-
-The bot writes a local log of every sent message to `logs/messages.log` on the server. To download it to your computer:
-
-```bash
-scp root@YOUR_DROPLET_IP:~/WhatsApp-Scheduler-Bot/logs/messages.log ./messages.log
-```
-
-This saves the file as `messages.log` in your current local directory. You can then open it in any text editor or spreadsheet app.
-
-To download it into a specific folder:
-
-```bash
-scp root@YOUR_DROPLET_IP:~/WhatsApp-Scheduler-Bot/logs/messages.log ~/Downloads/messages.log
-```
-
-> The `logs/` folder and `messages.log` file are created automatically the first time a message is sent. The file is excluded from git (listed in `.gitignore`) and lives only on the server.
-
----
-
-## Updating the bot from GitHub
-
-```bash
-ssh root@YOUR_DROPLET_IP
 cd WhatsApp-Scheduler-Bot
 git pull
-pm2 restart whatsapp-bot
-pm2 logs whatsapp-bot         # verify Bot is online!
+pm2 restart ecosystem.config.js --update-env
+pm2 logs whatsapp-bot
 ```
 
-> **Note — if you changed `.env`:** pm2 does not detect `.env` changes automatically. After editing `.env` on the server you must restart manually:
-> ```bash
-> nano .env
-> pm2 restart whatsapp-bot
-> ```
+---
+
+## Troubleshooting
+
+### @lid sender ID — owner commands not working
+
+**Symptom:** The bot responds to `!ping` but ignores all owner-only commands (`!sync`, `!pending`, etc.) even when sent from the owner's phone.
+
+**Cause:** WhatsApp's multi-device architecture sometimes delivers `msg.from` as a linked-device identifier (`@lid`) instead of the real phone number. For example:
+
+```
+msg.from  → 173980568793106@lid   (device ID — does not match OWNER_NUMBER)
+Expected  → 554888572036@c.us
+```
+
+This typically happens when **testing from WhatsApp Web** rather than the phone app, or after a session/cache issue.
+
+**Fix (already applied):** The message handler detects `@lid` suffixes and calls `client.getContactById()` to resolve the device ID to the real phone number before comparing against `OWNER_NUMBER`. No configuration change needed.
+
+**If the issue persists:**
+- Test the command from the **phone app**, not WhatsApp Web.
+- Check the server logs for `[MSG] sender=... isOwner=...` to see what number is being resolved.
+- Run `!reset-bot` from the phone app to clear the session and re-scan the QR code.
+
+---
+
+### Owner commands ignored despite correct number
+
+**Symptom:** Commands like `!sync` or `!pending` are silently ignored even when sent from `OWNER_NUMBER`.
+
+**Things to check:**
+- Confirm `OWNER_NUMBER` in `.env` has no `+`, spaces, or dashes — digits only, with country code (e.g. `554888572036`).
+- Check server logs for `[MSG] sender=... isOwner=false` to see what number is actually being received.
+- If sender shows as a `@lid` device ID, see the section above.
+- Owner identity is verified against `OWNER_NUMBER` only. The bot's own session number is intentionally not treated as a valid owner.
+
+---
+
+| Problem | Solution |
+|---------|----------|
+| `git clone` asks for password | Use a Personal Access Token (Step 5) |
+| Bot not starting | Check `pm2 logs whatsapp-bot` for errors |
+| QR code never appears | Run `node index.js` in foreground to see errors |
+| WhatsApp session invalid | Run `node index.js` again to scan new QR |
+
+---
+
+## What to Expect in the Logs
+
+| Log line | Meaning |
+|---|---|
+| `Bot is online!` | ✅ Healthy — bot connected and schedule synced |
+| `[INIT ERROR] ... Exiting so pm2 can restart...` | Chromium timed out on startup. pm2 retries automatically. |
+| `[DISCONNECTED] Exiting so pm2 can restart...` | WhatsApp session dropped. pm2 restarts and reconnects. |
+| `[AUTH FAILURE]` | Session invalidated by WhatsApp. Run `node index.js` to scan new QR. |
+
+---
+
+## Daily Management Commands
+
+```bash
+pm2 status                              # check if bot is running
+pm2 logs whatsapp-bot                   # see live logs
+pm2 restart ecosystem.config.js --update-env  # restart the bot
+pm2 stop whatsapp-bot                    # stop the bot
+```
+
+---
+
+## Downloading the Message Log File
+
+The bot writes a local log to `logs/messages.log` on the server. To download it:
+
+```bash
+scp root@YOUR_SERVER_IP:~/WhatsApp-Scheduler-Bot/logs/messages.log ./messages.log
+```
+
+> The `logs/` folder and `messages.log` are created automatically on first message send. They are gitignored and live only on the server.
 
 ---
 
@@ -562,6 +723,7 @@ pm2 logs whatsapp-bot         # verify Bot is online!
 - Use responsibly and avoid spam.
 - Phone numbers must include country codes and contain digits only.
 - `creds.json` and `.env` contain sensitive credentials — never commit them to a public repository.
+- Google Service Account credentials are loaded lazily on the first API call, not at startup. This means a missing or invalid `creds.json` / `GOOGLE_CREDS_JSON` will only surface when the bot first tries to sync the sheet, not immediately on boot.
 
 ---
 

@@ -162,14 +162,18 @@ function isRowFinished(data, todayMidnight) {
         // once / fallback: finished if already sent (log column is filled)
         if (data.log_last_sent_message && String(data.log_last_sent_message).trim()) return true;
 
-        // otherwise: compare DD/MM against today in the current year.
+        // otherwise: compare against the row's date.
+        // Use the year from the date column when present (DD/MM/YYYY or DD/MM/YY).
+        // Fall back to todayYear only for legacy DD/MM-only entries.
         const rawDate = data.date ? String(data.date).trim() : '';
         const parts = rawDate.split('/');
         if (parts.length < 2) return false;
         const d = parseInt(parts[0], 10);
         const m = parseInt(parts[1], 10);
         if (isNaN(d) || isNaN(m)) return false;
-        const rowDate = new Date(todayYear, m - 1, d);
+        const rawYear = parts.length >= 3 ? parseInt(parts[2], 10) : NaN;
+        const resolvedYear = !isNaN(rawYear) ? (rawYear < 100 ? 2000 + rawYear : rawYear) : todayYear;
+        const rowDate = new Date(resolvedYear, m - 1, d);
         return todayMidnight > rowDate;
     }
 
