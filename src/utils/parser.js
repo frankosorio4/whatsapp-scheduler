@@ -35,11 +35,36 @@ function parseRowData(data) {
     // The Google Sheet enforces that only one checkbox can be TRUE at a time via data validation.
     // The if/else chain below is a code-level safety net in case that validation is bypassed.
     // Checkbox values from Google Sheets arrive as the string 'TRUE' or 'FALSE'.
-    const isOnce      = data.once      === 'TRUE' || data.once      === true;
-    const isDaily     = data.daily     === 'TRUE' || data.daily     === true;
-    const isWeekly    = data.weekly    === 'TRUE' || data.weekly    === true;
-    const isMonthly   = data.monthly   === 'TRUE' || data.monthly   === true;
-    const isScheduled = data.scheduled === 'TRUE' || data.scheduled === true;
+    const isOnce       = data.once         === 'TRUE' || data.once         === true;
+    const isDaily      = data.daily        === 'TRUE' || data.daily        === true;
+    const isWeekly     = data.weekly       === 'TRUE' || data.weekly       === true;
+    const isMonthly    = data.monthly      === 'TRUE' || data.monthly      === true;
+    const isScheduled  = data.scheduled    === 'TRUE' || data.scheduled    === true;
+    const isEndOfMonth = data.end_of_month === 'TRUE' || data.end_of_month === true;
+
+    // --- END OF MONTH MODE ---
+    // Fires a daily cron at the defined hour/minute.
+    // shouldSendEndOfMonth() in scheduler.js gates the actual send to the last
+    // calendar day of each month.
+    // Stops after date_finish_schedule if set.
+    if (isEndOfMonth) {
+        let finishDate = null;
+        const rawFinishEOM = data.date_finish_schedule ? String(data.date_finish_schedule).trim() : '';
+        if (rawFinishEOM) {
+            const fp = rawFinishEOM.split('/');
+            if (fp.length >= 3) {
+                const fd  = parseInt(fp[0], 10);
+                const fm  = parseInt(fp[1], 10);
+                const rfy = parseInt(fp[2], 10);
+                const fy  = rfy < 100 ? 2000 + rfy : rfy;
+                if (!isNaN(fd) && !isNaN(fm) && !isNaN(rfy)) {
+                    finishDate = new Date(fy, fm - 1, fd);
+                }
+            }
+        }
+        const cronTime = `${minute} ${hour} * * *`;
+        return { day, month, hour, minute, subject, message, rawNumber, cronTime, mode: 'end_of_month', finishDate };
+    }
 
     // --- SCHEDULED MODE (interval-based) ---
     // Fires a daily cron at the defined hour/minute.
@@ -65,10 +90,10 @@ function parseRowData(data) {
         if (rawFinish) {
             const finishParts = rawFinish.split('/');
             if (finishParts.length >= 3) {
-                const finishDay      = parseInt(finishParts[0], 10);
-                const finishMonth     = parseInt(finishParts[1], 10);
-                const rawFinishYear   = parseInt(finishParts[2], 10);
-                const finishYear      = rawFinishYear < 100 ? 2000 + rawFinishYear : rawFinishYear;
+                const finishDay    = parseInt(finishParts[0], 10);
+                const finishMonth  = parseInt(finishParts[1], 10);
+                const rawFinishYear = parseInt(finishParts[2], 10);
+                const finishYear   = rawFinishYear < 100 ? 2000 + rawFinishYear : rawFinishYear;
                 if (!isNaN(finishDay) && !isNaN(finishMonth) && !isNaN(rawFinishYear)) {
                     finishDate = new Date(finishYear, finishMonth - 1, finishDay);
                 }
@@ -145,20 +170,21 @@ function parseRowData(data) {
 //
 // Rules:
 //   once / fallback : finished if DD/MM in the given current year is strictly in the past.
-//   daily/weekly/monthly/scheduled : finished if date_finish_schedule is set and strictly past.
+//   daily/weekly/monthly/scheduled/end_of_month : finished if date_finish_schedule is set and strictly past.
 //
 // todayMidnight must be a Date at midnight local time (São Paulo), passed in by the caller
 // so this function stays pure and testable without any Date.now() side effects.
 function isRowFinished(data, todayMidnight) {
     const todayYear = todayMidnight.getFullYear();
 
-    const isOnce      = data.once      === 'TRUE' || data.once      === true;
-    const isDaily     = data.daily     === 'TRUE' || data.daily     === true;
-    const isWeekly    = data.weekly    === 'TRUE' || data.weekly    === true;
-    const isMonthly   = data.monthly   === 'TRUE' || data.monthly   === true;
-    const isScheduled = data.scheduled === 'TRUE' || data.scheduled === true;
+    const isOnce       = data.once         === 'TRUE' || data.once         === true;
+    const isDaily      = data.daily        === 'TRUE' || data.daily        === true;
+    const isWeekly     = data.weekly       === 'TRUE' || data.weekly       === true;
+    const isMonthly    = data.monthly      === 'TRUE' || data.monthly      === true;
+    const isScheduled  = data.scheduled    === 'TRUE' || data.scheduled    === true;
+    const isEndOfMonth = data.end_of_month === 'TRUE' || data.end_of_month === true;
 
-    if (isOnce || (!isDaily && !isWeekly && !isMonthly && !isScheduled)) {
+    if (isOnce || (!isDaily && !isWeekly && !isMonthly && !isScheduled && !isEndOfMonth)) {
         // once / fallback: finished if already sent (log column is filled)
         if (data.log_last_sent_message && String(data.log_last_sent_message).trim()) return true;
 
@@ -177,7 +203,7 @@ function isRowFinished(data, todayMidnight) {
         return todayMidnight > rowDate;
     }
 
-    // recurring / scheduled: finished only if date_finish_schedule is set and past.
+    // recurring / scheduled / end_of_month: finished only if date_finish_schedule is set and past.
     const rawFinish = data.date_finish_schedule ? String(data.date_finish_schedule).trim() : '';
     if (!rawFinish) return false;
     const fp = rawFinish.split('/');
@@ -211,7 +237,7 @@ function daysInMonth(month, year) {
 //   hour: ...
 //   schedule: ...
 //   interval: ...               (required for scheduled mode only, e.g. 3d / 2w / 1mo)
-//   date_finish_schedule: ...   (required for scheduled mode; optional for others)
+//   date_finish_schedule: ...   (optional for all modes)
 //
 // Pure function — no require() calls, no side effects.
 function parseNewScheduleInput(text) {
@@ -252,9 +278,9 @@ function parseNewScheduleInput(text) {
 
     // --- REQUIRED: schedule mode ---
     const scheduleRaw = (fields['schedule'] || '').toLowerCase().trim();
-    const validModes  = ['once', 'daily', 'weekly', 'monthly', 'scheduled'];
-    if (!scheduleRaw) return { ok: false, error: '❌ *schedule* is required. Options: once | daily | weekly | monthly | scheduled' };
-    if (!validModes.includes(scheduleRaw)) return { ok: false, error: '❌ *schedule* must be one of: once | daily | weekly | monthly | scheduled' };
+    const validModes  = ['once', 'daily', 'weekly', 'monthly', 'scheduled', 'end_of_month'];
+    if (!scheduleRaw) return { ok: false, error: '❌ *schedule* is required. Options: once | daily | weekly | monthly | scheduled | end_of_month' };
+    if (!validModes.includes(scheduleRaw)) return { ok: false, error: '❌ *schedule* must be one of: once | daily | weekly | monthly | scheduled | end_of_month' };
 
     // --- REQUIRED: date — DD/MM/YYYY for all modes ---
     const rawDate = fields['date'] || '';
@@ -289,9 +315,6 @@ function parseNewScheduleInput(text) {
     let intervalMonths = 0;
 
     if (scheduleRaw === 'scheduled') {
-        // date_finish_schedule is required for scheduled mode
-        //if (!rawFinish) return { ok: false, error: '❌ *date_finish_schedule* (DD/MM/YYYY) is required for *scheduled* mode.' };
-
         // interval is required for scheduled mode — parse "3d", "2w", "1mo"
         const intervalRaw = (fields['interval'] || '').toLowerCase().trim();
         if (!intervalRaw) return { ok: false, error: '❌ *interval* is required for *scheduled* mode (e.g. 3d, 2w, 1mo).' };
@@ -320,14 +343,15 @@ function parseNewScheduleInput(text) {
     const sheetData = {
         subject,
         message,
-        number:    rawNumber,
-        date:      rawDate,
-        hour:      `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`,
-        once:      scheduleRaw === 'once'      ? 'TRUE' : 'FALSE',
-        daily:     scheduleRaw === 'daily'     ? 'TRUE' : 'FALSE',
-        weekly:    scheduleRaw === 'weekly'    ? 'TRUE' : 'FALSE',
-        monthly:   scheduleRaw === 'monthly'   ? 'TRUE' : 'FALSE',
-        scheduled: scheduleRaw === 'scheduled' ? 'TRUE' : 'FALSE',
+        number:        rawNumber,
+        date:          rawDate,
+        hour:          `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`,
+        once:          scheduleRaw === 'once'          ? 'TRUE' : 'FALSE',
+        daily:         scheduleRaw === 'daily'         ? 'TRUE' : 'FALSE',
+        weekly:        scheduleRaw === 'weekly'        ? 'TRUE' : 'FALSE',
+        monthly:       scheduleRaw === 'monthly'       ? 'TRUE' : 'FALSE',
+        scheduled:     scheduleRaw === 'scheduled'     ? 'TRUE' : 'FALSE',
+        end_of_month:  scheduleRaw === 'end_of_month'  ? 'TRUE' : 'FALSE',
         interval_days:         intervalDays   > 0 ? String(intervalDays)   : '',
         interval_weeks:        intervalWeeks  > 0 ? String(intervalWeeks)  : '',
         interval_months:       intervalMonths > 0 ? String(intervalMonths) : '',

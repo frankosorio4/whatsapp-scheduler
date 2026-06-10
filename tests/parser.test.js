@@ -910,3 +910,177 @@ describe('parseNewScheduleInput()', () => {
     });
 
 });
+
+// ---------------------------------------------------------------------------
+// 9. end_of_month mode - parseRowData
+// ---------------------------------------------------------------------------
+describe('parseRowData() - end_of_month mode', () => {
+
+    function makeEOMRow(overrides = {}) {
+        return {
+            subject: 'Month-end report',
+            message: 'Please submit the report!',
+            number: '5511999999999',
+            date: '01/01/2026',
+            hour: '08:00',
+            once: 'FALSE',
+            daily: 'FALSE',
+            weekly: 'FALSE',
+            monthly: 'FALSE',
+            scheduled: 'FALSE',
+            end_of_month: 'TRUE',
+            date_finish_schedule: '',
+            ...overrides,
+        };
+    }
+
+    it('sets mode "end_of_month" and returns a daily cron at the defined hour', () => {
+        const result = parseRowData(makeEOMRow());
+
+        expect(result).not.toBeNull();
+        expect(result.mode).toBe('end_of_month');
+        expect(result.cronTime).toBe('0 8 * * *');
+    });
+
+    it('returns finishDate as null when date_finish_schedule is empty', () => {
+        const result = parseRowData(makeEOMRow({ date_finish_schedule: '' }));
+
+        expect(result).not.toBeNull();
+        expect(result.finishDate).toBeNull();
+    });
+
+    it('parses finishDate correctly when date_finish_schedule is set', () => {
+        const result = parseRowData(makeEOMRow({ date_finish_schedule: '31/12/2026' }));
+
+        expect(result).not.toBeNull();
+        expect(result.finishDate).toBeInstanceOf(Date);
+        expect(result.finishDate.getFullYear()).toBe(2026);
+        expect(result.finishDate.getMonth()).toBe(11);
+        expect(result.finishDate.getDate()).toBe(31);
+    });
+
+    it('expands a 2-digit finish year for end_of_month rows', () => {
+        const result = parseRowData(makeEOMRow({ date_finish_schedule: '31/12/26' }));
+
+        expect(result).not.toBeNull();
+        expect(result.finishDate.getFullYear()).toBe(2026);
+    });
+
+    it('accepts boolean true for the end_of_month checkbox', () => {
+        const result = parseRowData(makeEOMRow({ end_of_month: true }));
+
+        expect(result).not.toBeNull();
+        expect(result.mode).toBe('end_of_month');
+    });
+
+});
+
+// ---------------------------------------------------------------------------
+// 10. isRowFinished() - end_of_month mode
+// ---------------------------------------------------------------------------
+describe('isRowFinished() - end_of_month mode', () => {
+
+    const TODAY = new Date(2026, 3, 1); // 01/04/2026
+
+    function makeEOMData(overrides = {}) {
+        return {
+            subject: 'EOM test',
+            number: '5511999999999',
+            date: '01/01/2026',
+            hour: '08:00',
+            once: 'FALSE',
+            daily: 'FALSE',
+            weekly: 'FALSE',
+            monthly: 'FALSE',
+            scheduled: 'FALSE',
+            end_of_month: 'TRUE',
+            date_finish_schedule: '',
+        };
+    }
+
+    it('returns false when date_finish_schedule is empty (runs indefinitely)', () => {
+        expect(isRowFinished(makeEOMData(), TODAY)).toBe(false);
+    });
+
+    it('returns true when date_finish_schedule is in the past', () => {
+        expect(isRowFinished({ ...makeEOMData(), date_finish_schedule: '28/03/2026' }, TODAY)).toBe(true);
+    });
+
+    it('returns false when date_finish_schedule is today', () => {
+        expect(isRowFinished({ ...makeEOMData(), date_finish_schedule: '01/04/2026' }, TODAY)).toBe(false);
+    });
+
+    it('returns false when date_finish_schedule is in the future', () => {
+        expect(isRowFinished({ ...makeEOMData(), date_finish_schedule: '31/12/2026' }, TODAY)).toBe(false);
+    });
+
+});
+
+// ---------------------------------------------------------------------------
+// 11. parseNewScheduleInput() - end_of_month mode
+// ---------------------------------------------------------------------------
+describe('parseNewScheduleInput() - end_of_month mode', () => {
+
+    function makeEOMTemplate(overrides = {}) {
+        const defaults = {
+            subject: 'Monthly report',
+            message: 'Please submit!',
+            number: '5511999999999',
+            date: '01/01/2026',
+            hour: '08:00',
+            schedule: 'end_of_month',
+            interval: '',
+            date_finish_schedule: '',
+        };
+        const fields = { ...defaults, ...overrides };
+        return [
+            `subject: ${fields.subject}`,
+            `message: ${fields.message}`,
+            `number: ${fields.number}`,
+            `date: ${fields.date}`,
+            `hour: ${fields.hour}`,
+            `schedule: ${fields.schedule}`,
+            `interval: ${fields.interval}`,
+            `date_finish_schedule: ${fields.date_finish_schedule}`,
+        ].join('\n');
+    }
+
+    it('returns ok:true and sets end_of_month to TRUE', () => {
+        const result = parseNewScheduleInput(makeEOMTemplate());
+
+        expect(result.ok).toBe(true);
+        expect(result.data.end_of_month).toBe('TRUE');
+        expect(result.data.once).toBe('FALSE');
+        expect(result.data.daily).toBe('FALSE');
+        expect(result.data.monthly).toBe('FALSE');
+        expect(result.data.scheduled).toBe('FALSE');
+    });
+
+    it('does not require interval for end_of_month mode', () => {
+        const result = parseNewScheduleInput(makeEOMTemplate({ interval: '' }));
+
+        expect(result.ok).toBe(true);
+    });
+
+    it('accepts an optional date_finish_schedule', () => {
+        const result = parseNewScheduleInput(makeEOMTemplate({ date_finish_schedule: '31/12/2026' }));
+
+        expect(result.ok).toBe(true);
+        expect(result.data.date_finish_schedule).toBe('31/12/2026');
+    });
+
+    it('accepts end_of_month in uppercase', () => {
+        const result = parseNewScheduleInput(makeEOMTemplate({ schedule: 'END_OF_MONTH' }));
+
+        expect(result.ok).toBe(true);
+        expect(result.data.end_of_month).toBe('TRUE');
+    });
+
+    it('returns ok:false when schedule is an invalid variant like "end_of_month_invalid"', () => {
+        const result = parseNewScheduleInput(makeEOMTemplate({ schedule: 'end_of_month_invalid' }));
+
+        expect(result.ok).toBe(false);
+        expect(result.error).toMatch(/schedule/i);
+    });
+
+});

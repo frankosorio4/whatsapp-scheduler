@@ -29,7 +29,7 @@ function getNewScheduleTemplate() {
         `• *number* — digits only, include country code (e.g. 5511999999999)\n` +
         `• *date* format: DD/MM/YYYY (e.g. 15/04/2026)\n` +
         `• *hour* format: HH:MM 24h (e.g. 14:30)\n` +
-        `• *schedule* options: once | daily | weekly | monthly | scheduled\n` +
+        `• *schedule* options: once | daily | weekly | monthly | scheduled | end_of_month\n` +
         `• *interval* — only for scheduled mode: e.g. 3d, 2w, 1mo\n` +
         `• *date_finish_schedule* — optional (DD/MM/YYYY). Required only if you want a stop date.\n\n` +
         `*Fill* in the template below *and send* that message back. *Do not change* the field names.`
@@ -53,11 +53,12 @@ function getNewScheduleTemplate() {
 // Called after successful parseNewScheduleInput, before writing to the sheet.
 function buildScheduleConfirmation(data) {
     const modeLabel =
-        data.once      === 'TRUE' ? 'once' :
-        data.daily     === 'TRUE' ? 'daily' :
-        data.weekly    === 'TRUE' ? 'weekly' :
-        data.monthly   === 'TRUE' ? 'monthly' :
-        data.scheduled === 'TRUE' ? 'scheduled' : '—';
+        data.once         === 'TRUE' ? 'once' :
+        data.daily        === 'TRUE' ? 'daily' :
+        data.weekly       === 'TRUE' ? 'weekly' :
+        data.monthly      === 'TRUE' ? 'monthly' :
+        data.scheduled    === 'TRUE' ? 'scheduled' :
+        data.end_of_month === 'TRUE' ? 'end_of_month' : '—';
 
     let intervalLabel = '—';
     if (data.scheduled === 'TRUE') {
@@ -83,7 +84,7 @@ function buildScheduleConfirmation(data) {
 // --- SORT BY MODE ---
 // Comparator for recurring rows in getPendingMessages().
 // Orders: daily → weekly → monthly. Unknown modes sort last.
-const MODE_ORDER = { daily: 0, weekly: 1, monthly: 2 };
+const MODE_ORDER = { daily: 0, weekly: 1, monthly: 2, end_of_month: 3 };
 
 function sortByMode(a, b) {
     return (MODE_ORDER[a.mode] ?? 99) - (MODE_ORDER[b.mode] ?? 99);

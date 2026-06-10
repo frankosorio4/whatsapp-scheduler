@@ -66,6 +66,21 @@ function computeNextOccurrence(parsed, now) {
         return candidate(nextMonth.getFullYear(), nextMonth.getMonth() + 1, day);
     }
 
+    if (mode === 'end_of_month') {
+        // Next occurrence: the last day of this month if not yet passed, otherwise last day of next month.
+        const lastDayThisMonth = new Date(y, mo, 0).getDate(); // last day of current month
+        const thisMonthFire = candidate(y, mo, lastDayThisMonth);
+        if (thisMonthFire > now) {
+            if (parsed.finishDate && thisMonthFire > parsed.finishDate) return null;
+            return thisMonthFire;
+        }
+        // Advance to last day of next month
+        const nextMonthLastDay = new Date(y, mo + 1, 0).getDate();
+        const nextMonthFire = candidate(y, mo + 1, nextMonthLastDay);
+        if (parsed.finishDate && nextMonthFire > parsed.finishDate) return null;
+        return nextMonthFire;
+    }
+
     if (mode === 'scheduled') {
         // Walk forward from start date in interval steps until we find
         // the first future send day at the row's hour:minute.

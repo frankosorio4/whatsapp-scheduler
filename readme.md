@@ -113,7 +113,7 @@ flowchart TD
 # Features
 
 - Send **scheduled WhatsApp messages automatically**
-- Five scheduling modes: **once, daily, weekly, monthly, scheduled (interval-based)**
+- Five scheduling modes: **once, daily, weekly, monthly, scheduled (interval-based), end_of_month**
 - **Interval-based scheduling**: send every N days, weeks, or months from a start date
 - **Add new schedules via WhatsApp** using the `!new-schedule` command — no spreadsheet access needed
 - Manage everything from **Google Sheets** — no code changes needed
@@ -124,7 +124,7 @@ flowchart TD
 - Persistent WhatsApp login using **LocalAuth**
 - **Human-like staggered delays** between messages to reduce spam flags
 - **Archive finished rows** automatically to a "done" sheet to keep the active spreadsheet clean
-- **Unit tested** with Jest — pure parsing logic covered by 214 test cases across 23 groups in 6 test files
+- **Unit tested** with Jest — pure parsing logic covered by 228 test cases across 26 groups in 6 test files
 
 ---
 
@@ -143,8 +143,10 @@ whatsapp-project/
 │   │   ├── notifier.js       ← withRetry(), notifyOwner() — retry logic and owner alerts
 │   │   └── messages.js       ← getHelpMessage(), getLogsMessage() — pure WhatsApp reply builders
 │   └── scheduler.js          ← Core engine: sync, cron scheduling, send, archive, pending, save
+├── google-apps-script/
+│   └── sheet-utils.gs          ← Google Apps Script for checkbox exclusivity and sheet setup
 ├── tests/
-│   ├── parser.test.js        ← Jest unit tests for parser.js (93 test cases across 8 groups)
+│   ├── parser.test.js        ← Jest unit tests for parser.js (107 test cases across 11 groups)
 │   ├── logger.test.js        ← Jest unit tests for logger.js (19 test cases across 2 groups)
 │   ├── notifier.test.js      ← Jest unit tests for notifier.js (13 test cases across 4 groups)
 │   ├── formatter.test.js     ← Jest unit tests for formatter.js (38 test cases across 5 groups)
@@ -230,22 +232,37 @@ xxxxx@xxxxx.iam.gserviceaccount.com
 
 Give it **Editor** permission.
 
+## Step 6 — Set up Checkbox Exclusivity & Sheet Headers
+To initialize your sheet and enforce mutual exclusivity for checkbox modes:
+1. Open your Google Sheet.
+2. Click **Extensions → Apps Script**.
+3. Delete any existing code.
+4. Copy the code from `google-apps-script/sheet-utils.gs` in this project.
+5. Paste it into the editor.
+6. Click the **Save** icon (diskette).
+7. Refresh your Google Sheet tab. You will see a new **Bot Setup** menu in the top bar.
+8. Click **Bot Setup → Initialize Sheet Structure** to create the required headers.
+9. Any time you check a box for a scheduling mode, the script will automatically ensure only one is selected for that row.
+
 ---
 
 # Google Sheet Structure
 
+> **⚠️ CRITICAL: DO NOT MODIFY COLUMN STRUCTURE**
+> The bot relies on the exact column order and header names defined below. The first column (`#`) must remain in position A1, even if empty. Deleting or rearranging columns will break the bot's ability to read and update your schedule.
+
 Your sheet must have the following columns:
 
 ```
-# | subject | message | number | date | hour | once | daily | weekly | monthly | scheduled | interval_days | interval_weeks | interval_months | date_finish_schedule | log_last_sent_message | server_updated_at
+# | subject | message | number | date | hour | once | daily | weekly | monthly | scheduled | end_of_month | interval_days | interval_weeks | interval_months | date_finish_schedule | log_last_sent_message | server_updated_at
 ```
 
 Example rows:
 
-| # | subject | message | number | date | hour | once | daily | weekly | monthly | scheduled | interval_days | interval_weeks | interval_months | date_finish_schedule | log_last_sent_message | server_updated_at |
+| # | subject | message | number | date | hour | once | daily | weekly | monthly | scheduled | end_of_month | interval_days | interval_weeks | interval_months | date_finish_schedule | log_last_sent_message | server_updated_at |
 |---|---------|---------|--------|------|------|------|-------|--------|---------|-----------|--------------|--------------|----------------|---------------------|----------------------|-------------------|
-| 1 | Reminder | Hello! | 5511999999999 | 20/06/2026 | 14:30 | ☑ | ☐ | ☐ | ☐ | ☐ | | | | | | |
-| 2 | Follow up | Check in! | 5511999999999 | 01/04/2026 | 09:00 | ☐ | ☐ | ☐ | ☐ | ☑ | 2 | | | | | |
+| 1 | Reminder | Hello! | 5511999999999 | 20/06/2026 | 14:30 | ☑ | ☐ | ☐ | ☐ | ☐ | ☐ | | | | | | |
+| 2 | Follow up | Check in! | 5511999999999 | 01/04/2026 | 09:00 | ☐ | ☐ | ☐ | ☐ | ☑ | ☐ | 2 | | | | | |
 
 ### Column descriptions
 
@@ -255,12 +272,13 @@ Example rows:
 
 **hour** — Format `HH:MM` 24h. Example: `14:30`
 
-**once / daily / weekly / monthly / scheduled** — Checkboxes. Only one can be selected per row (enforced by sheet data validation via Apps Script):
+**once / daily / weekly / monthly / scheduled / end_of_month** — Checkboxes. Only one can be selected per row (enforced by sheet data validation via Apps Script):
 - **once** — sends at the exact date and time, never again
 - **daily** — sends every day at the defined hour. Stops after `date_finish_schedule` if set, otherwise runs indefinitely.
 - **weekly** — sends every week on the same weekday derived from the date column. Stops after `date_finish_schedule` if set, otherwise runs indefinitely.
 - **monthly** — sends every month on the same day number. Stops after `date_finish_schedule` if set, otherwise runs indefinitely.
 - **scheduled** — sends every N days, weeks, or months from the start date. Stops after `date_finish_schedule` if set, otherwise runs indefinitely.
+- **end_of_month** — sends on the last calendar day of each month (e.g. Jan 31, Feb 28/29, Apr 30) at the defined hour. Stops after `date_finish_schedule` if set, otherwise runs indefinitely.
 
 **interval_days** — (scheduled mode only) Send every N days. Example: `2` = every 2 days.
 
@@ -419,7 +437,7 @@ The `!new-schedule` command lets the owner add a new scheduled message directly 
 - `number` — required, digits only, include country code (e.g. `5511999999999`)
 - `date` — required, format `DD/MM/YYYY` (e.g. `15/04/2026`). Day is validated against the month (e.g. `31/04` is rejected). Leap years are handled correctly.
 - `hour` — required, format `HH:MM` 24h (e.g. `14:30`)
-- `schedule` — required, one of: `once | daily | weekly | monthly | scheduled`
+- `schedule` — required, one of: `once | daily | weekly | monthly | scheduled | end_of_month`
 - `interval` — required only for `scheduled` mode (e.g. `3d`, `2w`, `1mo`)
 - `date_finish_schedule` — optional, format `DD/MM/YYYY`. If provided, the bot stops sending after this date.
 
@@ -729,20 +747,19 @@ scp root@YOUR_SERVER_IP:~/WhatsApp-Scheduler-Bot/logs/messages.log ./messages.lo
 
 # Technologies Used
 
-- Node.js
-- whatsapp-web.js
-- Puppeteer (via whatsapp-web.js)
-- Google Sheets API
-- node-cron
-- google-auth-library
-- dotenv
-- pm2
-- Jest (testing)
-- nodemon (dev)
+- [Node.js](https://nodejs.org/)
+- [whatsapp-web.js](https://www.npmjs.com/package/whatsapp-web.js)
+- [Puppeteer](https://pptr.dev/) (via whatsapp-web.js)
+- [Google Sheets API](https://developers.google.com/sheets/api)
+- [node-cron](https://www.npmjs.com/package/node-cron)
+- [google-auth-library](https://www.npmjs.com/package/google-auth-library)
+- [dotenv](https://www.npmjs.com/package/dotenv)
+- [pm2](https://www.npmjs.com/package/pm2)
+- [Jest](https://jestjs.io/) (testing)
+- [nodemon](https://www.npmjs.com/package/nodemon) (dev)
 
 ---
 
 # License
 
-This project is intended for **educational and automation purposes**.
-Use responsibly and respect WhatsApp's terms of service.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

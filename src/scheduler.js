@@ -70,6 +70,36 @@ function shouldSendToday(parsed, logLastSent) {
     return false;
 }
 
+// --- SHOULD SEND END OF MONTH ---
+// Returns true if today is the last calendar day of the current month.
+// Called inside the daily cron for 'end_of_month' rows before sending.
+//
+// Rules:
+//   - If today is past finishDate → skip
+//   - If message was already sent today (log_last_sent_message contains today's date) → skip
+//   - Today must be the last day of the current month
+function shouldSendEndOfMonth(parsed, logLastSent) {
+    const now = new Date();
+    const todayStr = now.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+    const [todayDay, todayMonth, todayYear] = todayStr.split('/').map(Number);
+    const todayMidnight = new Date(todayYear, todayMonth - 1, todayDay);
+
+    // Check finish date
+    if (parsed.finishDate && todayMidnight > parsed.finishDate) return false;
+
+    // Check if already sent today
+    if (logLastSent) {
+        const logDate = String(logLastSent).trim().split(' ')[0];
+        if (logDate === todayStr) return false;
+    }
+
+    // Check if today is the last day of the month.
+    // new Date(year, month, 0) gives the last day of the previous month,
+    // so new Date(year, todayMonth, 0).getDate() = last day of todayMonth.
+    const lastDayOfMonth = new Date(todayYear, todayMonth, 0).getDate();
+    return todayDay === lastDayOfMonth;
+}
+
 // --- SYNC SHEET TO SCHEDULER ---
 // Stops all existing cron jobs, re-reads the sheet, and creates new jobs.
 // Called on startup and every 30 minutes by index.js.
@@ -116,6 +146,7 @@ async function syncSheetToScheduler(client) {
                 parsed.finishDate &&
                 parsed.mode !== 'scheduled' &&
                 parsed.mode !== 'once' &&
+                parsed.mode !== 'end_of_month' &&
                 todayMidnight > parsed.finishDate
             ) {
                 console.log(`[EXPIRED] Row ${index + 2} [${parsed.mode}] "${parsed.subject}": finish date ${parsed.finishDate.toLocaleDateString('pt-BR')} passed. Skipping.`);
@@ -145,6 +176,9 @@ async function syncSheetToScheduler(client) {
                                : `every ${parsed.intervalMonths}mo`;
                 const finish = parsed.finishDate ? parsed.finishDate.toLocaleDateString('pt-BR') : 'no end date';
                 console.log(`Scheduled Row ${sheetIndex + 2} [scheduled/${interval}] "${subject}": starts ${day}/${month}/${parsed.startYear} at ${hour}:${minute.toString().padStart(2, '0')} until ${finish} (slot ${slotIndex + 1}/${cronGroups[cronTime]})`);
+            } else if (parsed.mode === 'end_of_month') {
+                const finish = parsed.finishDate ? parsed.finishDate.toLocaleDateString('pt-BR') : 'no end date';
+                console.log(`Scheduled Row ${sheetIndex + 2} [end_of_month] "${subject}": last day of each month at ${hour}:${minute.toString().padStart(2, '0')} until ${finish} (slot ${slotIndex + 1}/${cronGroups[cronTime]})`);
             } else {
                 console.log(`Scheduled Row ${sheetIndex + 2} [${parsed.mode}] "${subject}": ${day}/${month} at ${hour}:${minute.toString().padStart(2, '0')} (slot ${slotIndex + 1}/${cronGroups[cronTime]})`);
             }
@@ -346,6 +380,15 @@ function sendScheduledMessage(client, row, parsed, data, index, subject, message
             const logLastSent = row.toObject().log_last_sent_message || '';
             if (!shouldSendToday(parsed, logLastSent)) {
                 console.log(`[SKIP] "${subject}" — not a send day (scheduled mode).`);
+                return;
+            }
+        }
+
+        // --- END OF MONTH MODE GATE ---
+        if (parsed.mode === 'end_of_month') {
+            const logLastSent = row.toObject().log_last_sent_message || '';
+            if (!shouldSendEndOfMonth(parsed, logLastSent)) {
+                console.log(`[SKIP] "${subject}" — not the last day of month (end_of_month mode).`);
                 return;
             }
         }
